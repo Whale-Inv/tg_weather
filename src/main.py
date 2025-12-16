@@ -1,53 +1,49 @@
 import os
-import requests
-import logging
-from aiogram import Bot, Dispatcher, types, executor
+import aiohttp
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
+from aiogram import F
 from dotenv import load_dotenv
 
+import asyncio
+
 load_dotenv()
+API_TOKEN = os.getenv("API_TOKEN")
+OWM_TOKEN = os.getenv("OWM_TOKEN")
 
-API_TOKEN = os.getenv('API_TOKEN')
-OWM_TOKEN = os.getenv('OWM_TOKEN')
-
-# Настройка логгера
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ]
+bot = Bot(
+    token=API_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-logger = logging.getLogger(__name__)
+dp = Dispatcher()
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
-
-@dp.message_handler(commands=['start'])
-async def start(message: types.Message):
-    logger.info(f"User {message.from_user.id} started the bot")
-    await message.reply("Привет! Напиши город, и я пришлю погоду.")
-
-@dp.message_handler()
-async def get_weather(message: types.Message):
-    city = message.text
-    logger.info(f"User {message.from_user.id} requested weather for: {city}")
+async def get_weather(city):
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={OWM_TOKEN}&units=metric&lang=ru"
-    try:
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if data.get("main"):
-            temp = data["main"]["temp"]
-            desc = data["weather"][0]["description"]
-            await message.reply(f"В {city} сейчас {temp}°C, {desc}.")
-            logger.info(f"Weather sent for {city}: {temp}°C, {desc}")
-        else:
-            await message.reply("Не нашёл такой город. Попробуй ещё раз!")
-            logger.warning(f"City not found: {city}")
-    except Exception as e:
-        await message.reply("Произошла ошибка при получении погоды.")
-        logger.error(f"Error fetching weather for {city}: {e}")
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                temp = data['main']['temp']
+                desc = data['weather'][0]['description']
+                return f"Погода в {city}: {temp}°C, {desc}"
+            else:
+                return "Город не найден или ошибка API."
 
-if __name__ == '__main__':
-    logger.info("Bot started")
-    executor.start_polling(dp)
+@dp.message(Command("start"))
+async def start(message: Message):
+    await message.answer("Привет! Напиши название города, и я пришлю погоду.")
+
+@dp.message(F.text)
+async def weather(message: Message):
+    city = message.text.strip()
+    result = await get_weather(city)
+    await message.answer(result)
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
